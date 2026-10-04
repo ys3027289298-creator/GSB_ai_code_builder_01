@@ -324,7 +324,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = build_parser().parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except (ValueError, OSError) as e:
+        # User-facing errors (invalid prompt, missing file, ...) are reported
+        # as a single clean line on stderr; tracebacks never leak to the
+        # terminal. stdout stays untouched so piped consumers see nothing.
+        print(f"acb: error: {e}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- CLI: empty/oversized prompts and missing files now exit with code 2 and a
+  single clean stderr line instead of an uncaught traceback.
+- `prompt_engine`: prompts longer than `MAX_PROMPT_CHARS` (4000) are
+  rejected before template rendering or any LLM call.
+- `versioning`: `commit` is idempotent over the whole file history, so
+  duplicate submissions and commit-after-rollback no longer append
+  duplicate versions; `restore` swaps the target file atomically so a
+  failed rollback never corrupts the workspace.
+- `sandbox`: sandboxed children run in their own session and a wall-clock
+  timeout now kills the entire process group, so forked grandchildren can
+  no longer outlive a timed-out run.
+- `deployment`: a failed pipeline removes both stale artifacts from
+  previous runs and half-baked artifacts from the current run, and
+  `DeploymentReport.artifact` is only set when the pipeline succeeded;
+  packaging writes via a temp file with atomic rename.
+
 ## [0.1.0] - 2026-04-30
 
 ### Added

@@ -107,3 +107,20 @@ def test_commit_history_diff(capsys, tmp_path):
     rc = main(["--store", str(store), "diff", str(f), "1", "2"])
     out = capsys.readouterr().out
     assert "-print(1)" in out and "+print(2)" in out
+
+
+def test_empty_prompt_emits_clean_error_not_traceback(capsys):
+    rc = main(["plan", ""])
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "Traceback" not in captured.err
+    assert "prompt" in captured.err.lower()
+    assert captured.out == ""
+
+
+def test_overlong_prompt_is_rejected_by_cli(capsys):
+    rc = main(["plan", "x" * 20000])
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "Traceback" not in captured.err
+    assert captured.out == ""

@@ -23,6 +23,10 @@ import textwrap
 from dataclasses import asdict, dataclass, field
 from typing import Optional
 
+# Hard bound on accepted prompt size. Anything larger is rejected before it
+# can be embedded into templates or shipped to an LLM endpoint.
+MAX_PROMPT_CHARS = 4000
+
 
 @dataclass
 class GeneratedFile:
@@ -279,6 +283,10 @@ class PromptEngine:
         prompt = (prompt or "").strip()
         if not prompt:
             raise ValueError("prompt must be a non-empty string")
+        if len(prompt) > MAX_PROMPT_CHARS:
+            raise ValueError(
+                f"prompt too long: {len(prompt)} chars (max {MAX_PROMPT_CHARS})"
+            )
 
         if self.backend == "llm" and os.environ.get("OPENAI_API_KEY"):
             try:

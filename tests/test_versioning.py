@@ -50,3 +50,38 @@ def test_lookup_missing_version_raises(tmp_path):
     store.commit("a.py", "1\n")
     with pytest.raises(KeyError):
         store.read("a.py", 99)
+
+
+def test_duplicate_content_is_idempotent_even_after_newer_version(tmp_path):
+    store = VersionStore(tmp_path / "store")
+    v1 = store.commit("a.py", "one\n")
+    store.commit("a.py", "two\n")
+    again = store.commit("a.py", "one\n")
+    assert again.version == v1.version
+    assert again.sha256 == v1.sha256
+    assert [v.version for v in store.history("a.py")] == [1, 2]
+
+
+def test_rollback_then_commit_stays_consistent(tmp_path):
+    store = VersionStore(tmp_path / "store")
+    store.commit("a.py", "v1\n")
+    store.commit("a.py", "v2\n")
+    target = tmp_path / "work" / "a.py"
+    store.restore("a.py", 1, target)
+
+    version = store.commit("a.py", target.read_text())
+
+    assert version.version == 1
+    assert [v.version for v in store.history("a.py")] == [1, 2]
+
+
+def test_failed_restore_leaves_workspace_file_untouched(tmp_path):
+    import pytest
+
+    store = VersionStore(tmp_path / "store")
+    store.commit("a.py", "v1\n")
+    target = tmp_path / "a.py"
+    target.write_text("keep-me\n")
+    with pytest.raises(KeyError):
+        store.restore("a.py", 99, target)
+    assert target.read_text() == "keep-me\n"

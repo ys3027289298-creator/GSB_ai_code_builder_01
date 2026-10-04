@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -71,6 +72,12 @@ def _build_preexec_fn(memory_mb: int, cpu_seconds: int):
     def _limit() -> None:  # pragma: no cover - exercised in subprocess
         import resource
 
+        # Run in a dedicated session/process group so a wall-clock timeout
+        # can reap the whole tree (including forked grandchildren).
+        try:
+            os.setsid()
+        except OSError:
+            pass
         bytes_limit = memory_mb * 1024 * 1024
         try:
             resource.setrlimit(resource.RLIMIT_AS, (bytes_limit, bytes_limit))
@@ -176,23 +183,23 @@ class SecureSandbox:
 
         start = time.monotonic()
         timed_out = False
+        proc = subprocess.Popen(  # noqa: S603 - controlled command
+            cmd,
+            stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=str(cwd),
+            env=env,
+            preexec_fn=preexec,  # type: ignore[arg-type]
+        )
         try:
-            proc = subprocess.run(  # noqa: S603 - controlled command
-                cmd,
-                input=stdin,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout,
-                cwd=str(cwd),
-                env=env,
-                check=False,
-                preexec_fn=preexec,  # type: ignore[arg-type]
-            )
-            stdout, stderr, returncode = proc.stdout, proc.stderr, proc.returncode
-        except subprocess.TimeoutExpired as e:
+            stdout, stderr = proc.communicate(input=stdin, timeout=self.timeout)
+            returncode = proc.returncode
+        except subprocess.TimeoutExpired:
             timed_out = True
-            stdout = e.stdout.decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
-            stderr = e.stderr.decode("utf-8", "replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
+            self._terminate_tree(proc)
+            stdout, stderr = proc.communicate()
             returncode = 124
         duration = time.monotonic() - start
 
@@ -203,6 +210,19 @@ class SecureSandbox:
             timed_out=timed_out,
             duration_seconds=round(duration, 4),
         )
+
+    @staticmethod
+    def _terminate_tree(proc: subprocess.Popen) -> None:
+        """Kill the timed-out process and every process in its group."""
+        if os.name == "posix":
+            try:
+                # The child called setsid() in preexec_fn, so its pid is the
+                # process-group id; this also reaps forked grandchildren.
+                os.killpg(proc.pid, signal.SIGKILL)
+                return
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+        proc.kill()
 
     def _truncate(self, text: str) -> str:
         if len(text) <= self.output_budget:

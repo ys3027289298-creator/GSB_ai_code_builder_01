@@ -54,3 +54,27 @@ def test_truncates_huge_output():
     src = "print('A' * 4096)\n"
     result = sandbox.run_source(src)
     assert "[truncated" in result.stdout
+
+
+def test_timeout_kills_entire_process_group(tmp_path):
+    """A timed-out run must not leak grandchildren: the child is executed in
+    its own session so the whole process group can be reaped."""
+    import os
+    import time
+
+    sentinel = tmp_path / "grandchild-was-here"
+    src = textwrap.dedent(
+        f"""
+        import os, time
+        if os.fork() == 0:
+            time.sleep(1.5)
+            open({str(sentinel)!r}, "w").write("leaked")
+            os._exit(0)
+        time.sleep(30)
+        """
+    )
+    result = SecureSandbox(timeout=0.5).run_source(src)
+    assert result.timed_out
+    assert result.returncode == 124
+    time.sleep(2.0)  # a leaked grandchild would fire within this window
+    assert not os.path.exists(sentinel)

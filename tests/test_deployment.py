@@ -31,3 +31,39 @@ def test_unknown_stage_skipped(tmp_path):
     statuses = {s.name: s.status for s in report.stages}
     assert statuses["noop"] == "skipped"
     assert statuses["lint"] == "passed"
+
+
+def test_failed_deploy_removes_stale_artifact_from_previous_run(tmp_path):
+    project = PromptEngine().generate("build a CLI that greets a user")
+    sim = DeploymentSimulator()
+    workdir = tmp_path / "wd"
+    first = sim.deploy(project, workdir)
+    assert first.status == "succeeded"
+    artifact = workdir / f"{project.name}.tar"
+    assert artifact.is_file()
+
+    project.files[0].content = "def broken(:\n"  # break the project
+    second = sim.deploy(project, workdir)
+
+    assert second.status == "failed"
+    assert second.artifact is None
+    assert not artifact.exists(), "stale artifact must not survive a failed deploy"
+
+
+def test_failed_deploy_after_package_leaves_no_half_baked_artifact(tmp_path, monkeypatch):
+    from ai_code_builder.deployment import StageReport
+
+    project = PromptEngine().generate("hello")
+    sim = DeploymentSimulator()
+    monkeypatch.setattr(
+        sim,
+        "_deploy",
+        lambda p, w: StageReport(name="deploy", status="failed",
+                                 duration_seconds=0.0, log="simulated outage"),
+    )
+    workdir = tmp_path / "wd"
+    report = sim.deploy(project, workdir)
+
+    assert report.status == "failed"
+    assert report.artifact is None
+    assert not (workdir / f"{project.name}.tar").exists()

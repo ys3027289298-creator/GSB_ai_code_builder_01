@@ -12,6 +12,7 @@ sandbox to run an actual smoke test against the generated entrypoint.
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -69,6 +70,13 @@ class DeploymentSimulator:
     def deploy(self, project: GeneratedProject, workdir: Path | str) -> DeploymentReport:
         workdir = Path(workdir)
         workdir.mkdir(parents=True, exist_ok=True)
+        artifact_path = workdir / f"{project.name}.tar"
+
+        # A previous (possibly successful) run must not leave an artifact
+        # behind that a failing run could be mistaken for. Remove any stale
+        # release artifact before materialising and running the pipeline.
+        if artifact_path.exists():
+            artifact_path.unlink()
 
         # Materialise files so the simulator can run real checks.
         for f in project.files:
@@ -105,9 +113,15 @@ class DeploymentSimulator:
             if stage_report.status == "failed":
                 report.status = "failed"
                 break
-            if stage == "package" and stage_report.status == "passed":
-                report.artifact = str(workdir / f"{project.name}.tar")
 
+        if report.status == "succeeded" and artifact_path.is_file():
+            report.artifact = str(artifact_path)
+        else:
+            # Failed (or aborted) pipeline: drop any half-baked artifact so
+            # the workspace cannot be mistaken for a released state.
+            if artifact_path.exists():
+                artifact_path.unlink()
+            report.artifact = None
         report.finished_at = time.time()
         return report
 
@@ -185,11 +199,16 @@ class DeploymentSimulator:
 
         t0 = time.monotonic()
         artifact = workdir / f"{project.name}.tar"
+        tmp_artifact = artifact.with_name(artifact.name + ".part")
+        if tmp_artifact.exists():
+            tmp_artifact.unlink()
         try:
-            with tarfile.open(artifact, "w") as tar:
+            with tarfile.open(tmp_artifact, "w") as tar:
                 for f in project.files:
                     tar.add(workdir / f.path, arcname=f.path)
+            os.replace(tmp_artifact, artifact)
         except Exception as e:  # noqa: BLE001
+            tmp_artifact.unlink(missing_ok=True)
             return StageReport(
                 name="package",
                 status="failed",

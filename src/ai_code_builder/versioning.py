@@ -62,9 +62,12 @@ class VersionStore:
         history: list[dict] = files.setdefault(file, [])
 
         digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        if history and history[-1]["sha256"] == digest:
-            # Idempotent: don't record an identical snapshot twice.
-            return Version(**history[-1])
+        for entry in history:
+            # Idempotent over the whole history: re-committing content that
+            # matches *any* past version (including a restored older one)
+            # returns that version instead of appending a duplicate.
+            if entry["sha256"] == digest:
+                return Version(**entry)
 
         blob_path = self.root / self.BLOB_DIR / digest
         if not blob_path.exists():
@@ -96,7 +99,13 @@ class VersionStore:
     def restore(self, file: str, version: int, target: Path | str) -> Path:
         target = Path(target)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(self.read(file, version), encoding="utf-8")
+        # Resolve the blob first so a missing version cannot truncate an
+        # existing workspace file; then swap the file atomically so a failed
+        # rollback never leaves a half-written target behind.
+        content = self.read(file, version)
+        tmp = target.with_name(target.name + ".acb-tmp")
+        tmp.write_text(content, encoding="utf-8")
+        os.replace(tmp, target)
         return target
 
     def diff(self, file: str, a: int, b: int) -> str:

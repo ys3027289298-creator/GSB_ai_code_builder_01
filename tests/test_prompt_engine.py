@@ -47,3 +47,18 @@ def test_unknown_backend_raises():
 
     with pytest.raises(ValueError):
         PromptEngine(backend="bogus")
+
+
+def test_overlong_prompt_is_rejected():
+    import pytest
+
+    from ai_code_builder.prompt_engine import MAX_PROMPT_CHARS
+
+    with pytest.raises(ValueError):
+        PromptEngine().generate("word " * (MAX_PROMPT_CHARS + 1))
+
+
+def test_prompt_limit_is_a_sane_bound():
+    from ai_code_builder.prompt_engine import MAX_PROMPT_CHARS
+
+    assert 1000 <= MAX_PROMPT_CHARS <= 10_000
