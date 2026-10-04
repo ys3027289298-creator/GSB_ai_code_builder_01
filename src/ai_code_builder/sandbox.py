@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -176,33 +177,48 @@ class SecureSandbox:
 
         start = time.monotonic()
         timed_out = False
+        # Run the child in its own session/process group so that a timeout
+        # can kill the whole tree, not just the direct child. Without this,
+        # forked grandchildren outlive the sandbox and keep running.
+        proc = subprocess.Popen(  # noqa: S603 - controlled command
+            cmd,
+            stdin=subprocess.PIPE if stdin is not None else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=str(cwd),
+            env=env,
+            preexec_fn=preexec,  # type: ignore[arg-type]
+            start_new_session=os.name == "posix",
+        )
         try:
-            proc = subprocess.run(  # noqa: S603 - controlled command
-                cmd,
-                input=stdin,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout,
-                cwd=str(cwd),
-                env=env,
-                check=False,
-                preexec_fn=preexec,  # type: ignore[arg-type]
-            )
-            stdout, stderr, returncode = proc.stdout, proc.stderr, proc.returncode
-        except subprocess.TimeoutExpired as e:
+            stdout, stderr = proc.communicate(input=stdin, timeout=self.timeout)
+            returncode = proc.returncode
+        except subprocess.TimeoutExpired:
             timed_out = True
-            stdout = e.stdout.decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
-            stderr = e.stderr.decode("utf-8", "replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
+            self._terminate_tree(proc)
+            stdout, stderr = proc.communicate()
             returncode = 124
         duration = time.monotonic() - start
 
         return SandboxResult(
             returncode=returncode,
-            stdout=self._truncate(stdout),
-            stderr=self._truncate(stderr),
+            stdout=self._truncate(stdout or ""),
+            stderr=self._truncate(stderr or ""),
             timed_out=timed_out,
             duration_seconds=round(duration, 4),
         )
+
+    @staticmethod
+    def _terminate_tree(proc: subprocess.Popen) -> None:
+        """Kill the timed-out child and every process in its group."""
+        if os.name == "posix":
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+                return
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+        proc.kill()
 
     def _truncate(self, text: str) -> str:
         if len(text) <= self.output_budget:

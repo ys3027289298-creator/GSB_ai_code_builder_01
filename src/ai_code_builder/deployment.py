@@ -76,6 +76,11 @@ class DeploymentSimulator:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(f.content, encoding="utf-8")
 
+        # Remove any stale artifact from a previous run: this run must
+        # re-earn it, and a failed run must not leave one behind.
+        artifact_path = workdir / f"{project.name}.tar"
+        artifact_path.unlink(missing_ok=True)
+
         started = time.time()
         report = DeploymentReport(
             project=project.name,
@@ -106,9 +111,13 @@ class DeploymentSimulator:
                 report.status = "failed"
                 break
             if stage == "package" and stage_report.status == "passed":
-                report.artifact = str(workdir / f"{project.name}.tar")
+                report.artifact = str(artifact_path)
 
         report.finished_at = time.time()
+        if report.status == "failed":
+            # Invariant: a failed pipeline leaves no half-baked state.
+            report.artifact = None
+            artifact_path.unlink(missing_ok=True)
         return report
 
     # ------------------------------------------------------------------
@@ -190,6 +199,7 @@ class DeploymentSimulator:
                 for f in project.files:
                     tar.add(workdir / f.path, arcname=f.path)
         except Exception as e:  # noqa: BLE001
+            artifact.unlink(missing_ok=True)  # drop the partial tar
             return StageReport(
                 name="package",
                 status="failed",

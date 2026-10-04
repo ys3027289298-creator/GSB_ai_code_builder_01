@@ -57,6 +57,7 @@ class VersionStore:
         """Record a new version for ``file`` with the given content."""
         if not file:
             raise ValueError("file must be a non-empty string")
+        file = os.path.normpath(file)
         index = self._read_index()
         files = index.setdefault("files", {})
         history: list[dict] = files.setdefault(file, [])
@@ -84,7 +85,7 @@ class VersionStore:
 
     def history(self, file: str) -> list[Version]:
         index = self._read_index()
-        return [Version(**v) for v in index.get("files", {}).get(file, [])]
+        return [Version(**v) for v in index.get("files", {}).get(os.path.normpath(file), [])]
 
     def list_files(self) -> list[str]:
         return sorted(self._read_index().get("files", {}).keys())
@@ -96,7 +97,12 @@ class VersionStore:
     def restore(self, file: str, version: int, target: Path | str) -> Path:
         target = Path(target)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(self.read(file, version), encoding="utf-8")
+        content = self.read(file, version)
+        target.write_text(content, encoding="utf-8")
+        # Record the rollback as a new version so the store's latest entry
+        # always describes the content now sitting in the workspace.
+        # (Idempotent when the restored content is already the latest.)
+        self.commit(file, content, message=f"restore to v{version}")
         return target
 
     def diff(self, file: str, a: int, b: int) -> str:

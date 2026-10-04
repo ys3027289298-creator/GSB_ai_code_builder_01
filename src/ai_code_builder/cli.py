@@ -324,7 +324,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = build_parser().parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except ValueError as exc:
+        # Validation failures (empty/oversized prompt, bad limits, ...) are
+        # user errors: report them on stderr like argparse does, keep stdout
+        # clean, and exit non-zero without a traceback or partial state.
+        print(f"acb: error: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
